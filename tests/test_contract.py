@@ -67,6 +67,93 @@ def test_assumption_state_matches_eba_contract_shape():
     validate_assumption_state(state, now=NOW)
 
 
+
+
+def test_exact_expiry_is_stale():
+    status, reasons = evaluate_assumption(
+        [EvidenceRef("ev_1", "VERIFIED", valid_until=NOW)],
+        now=NOW,
+    )
+    assert status is AssumptionStatus.STALE
+    assert reasons == ["EVIDENCE_EXPIRED:ev_1"]
+
+
+def test_future_observation_is_stale():
+    status, reasons = evaluate_assumption(
+        [EvidenceRef("ev_1", "VERIFIED", observed_at="2026-09-27T16:00:01Z")],
+        now=NOW,
+    )
+    assert status is AssumptionStatus.STALE
+    assert reasons == ["EVIDENCE_FROM_FUTURE:ev_1"]
+
+
+def test_derived_state_cannot_outlive_finite_support():
+    state = build_assumption_state(
+        assumption_id="ci.failure-is-transient",
+        proposition="The observed CI failure is transient and safe to retry.",
+        evidence=[
+            EvidenceRef(
+                "ev_1",
+                "VERIFIED",
+                valid_until="2026-09-27T16:05:00Z",
+            )
+        ],
+        trace_id="tr_001",
+        checked_at=NOW,
+        valid_until=None,
+    )
+    assert state["valid_until"] == "2026-09-27T16:05:00Z"
+    validate_assumption_state(state, now="2026-09-27T16:04:59Z")
+    with pytest.raises(ContractViolation, match="ASSUMPTION_STALE"):
+        validate_assumption_state(state, now="2026-09-27T16:05:00Z")
+
+
+def test_requested_validity_is_capped_by_support():
+    state = build_assumption_state(
+        assumption_id="ci.failure-is-transient",
+        proposition="The observed CI failure is transient and safe to retry.",
+        evidence=[
+            EvidenceRef(
+                "ev_1",
+                "VERIFIED",
+                valid_until="2026-09-27T16:05:00Z",
+            )
+        ],
+        trace_id="tr_001",
+        checked_at=NOW,
+        valid_until="2026-09-27T17:00:00Z",
+    )
+    assert state["valid_until"] == "2026-09-27T16:05:00Z"
+
+
+def test_malformed_valid_until_is_rejected():
+    state = build_assumption_state(
+        assumption_id="ci.failure-is-transient",
+        proposition="The observed CI failure is transient and safe to retry.",
+        evidence=[EvidenceRef("ev_1", "VERIFIED")],
+        trace_id="tr_001",
+        checked_at=NOW,
+    )
+    malformed = copy.deepcopy(state)
+    malformed["valid_until"] = 123
+    unsigned = dict(malformed)
+    unsigned.pop("integrity", None)
+    import hashlib, json
+    malformed["integrity"] = {
+        "algorithm": "sha256",
+        "digest": hashlib.sha256(
+            json.dumps(
+                unsigned,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    with pytest.raises(ContractViolation, match="ASSUMPTION_VALID_UNTIL_INVALID"):
+        validate_assumption_state(malformed, now=NOW)
+
+
 def test_tampering_breaks_integrity():
     state = build_assumption_state(
         assumption_id="ci.failure-is-transient",

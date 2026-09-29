@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Iterable
 
 CONTRACT_VERSION = "eba.integration/v0.1"
+TEMPORAL_PROFILE_VERSION = "eba.temporal/v1"
 ASSUMPTION_KIND = "AssumptionState"
 
 
@@ -26,15 +27,19 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _parse_time(value: str | None) -> datetime | None:
+def _parse_time(value: Any, *, field: str, allow_none: bool = True) -> datetime | None:
     if value is None:
-        return None
+        if allow_none:
+            return None
+        raise ContractViolation(f"{field.upper()}_MISSING")
+    if not isinstance(value, str) or not value:
+        raise ContractViolation(f"{field.upper()}_INVALID")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ContractViolation(f"invalid timestamp: {value!r}") from exc
+        raise ContractViolation(f"{field.upper()}_INVALID") from exc
     if parsed.tzinfo is None:
-        raise ContractViolation("timestamps must include timezone information")
+        raise ContractViolation(f"{field.upper()}_INVALID")
     return parsed.astimezone(timezone.utc)
 
 
@@ -86,7 +91,7 @@ def evaluate_assumption(
     - at least one current VERIFIED evidence and no contradiction -> VALID
     - otherwise -> UNKNOWN
     """
-    current = _parse_time(now or _utc_now())
+    current = _parse_time(now or _utc_now(), field="evaluation_time", allow_none=False)
     assert current is not None
 
     items = list(evidence)
@@ -105,8 +110,13 @@ def evaluate_assumption(
             reasons.append(f"EVIDENCE_UNVERIFIED:{item.id}")
             continue
 
-        valid_until = _parse_time(item.valid_until)
-        if valid_until is not None and current > valid_until:
+        observed_at = _parse_time(item.observed_at, field="evidence_observed_at")
+        if observed_at is not None and observed_at > current:
+            reasons.append(f"EVIDENCE_FROM_FUTURE:{item.id}")
+            continue
+
+        valid_until = _parse_time(item.valid_until, field="evidence_valid_until")
+        if valid_until is not None and current >= valid_until:
             reasons.append(f"EVIDENCE_EXPIRED:{item.id}")
             continue
 
@@ -115,7 +125,11 @@ def evaluate_assumption(
     if any(reason.startswith("EVIDENCE_CONTRADICTED:") for reason in reasons):
         return AssumptionStatus.CONTRADICTED, reasons
 
-    if any(reason.startswith("EVIDENCE_EXPIRED:") for reason in reasons):
+    if any(
+        reason.startswith("EVIDENCE_EXPIRED:")
+        or reason.startswith("EVIDENCE_FROM_FUTURE:")
+        for reason in reasons
+    ):
         return AssumptionStatus.STALE, reasons
 
     if verified_current > 0:
@@ -143,12 +157,39 @@ def build_assumption_state(
         raise ContractViolation("trace_id is required")
 
     checked_at = checked_at or _utc_now()
+    checked_instant = _parse_time(checked_at, field="checked_at", allow_none=False)
+    assert checked_instant is not None
     evidence_list = list(evidence)
     status, invalidation_reasons = evaluate_assumption(evidence_list, now=checked_at)
+
+    requested_valid_until = _parse_time(
+        valid_until,
+        field="assumption_valid_until",
+        allow_none=True,
+    )
+    supporting_expiries = [
+        parsed
+        for item in evidence_list
+        if item.verification.upper() == "VERIFIED"
+        for parsed in [
+            _parse_time(
+                item.valid_until,
+                field="evidence_valid_until",
+                allow_none=True,
+            )
+        ]
+        if parsed is not None
+    ]
+    effective_valid_until = requested_valid_until
+    if supporting_expiries:
+        support_bound = min(supporting_expiries)
+        if effective_valid_until is None or effective_valid_until > support_bound:
+            effective_valid_until = support_bound
 
     artifact: dict[str, Any] = {
         "contract_version": CONTRACT_VERSION,
         "kind": ASSUMPTION_KIND,
+        "temporal_profile": TEMPORAL_PROFILE_VERSION,
         "trace_id": trace_id,
         "producer": producer,
         "created_at": checked_at,
@@ -158,7 +199,11 @@ def build_assumption_state(
         "evidence_refs": [item.id for item in evidence_list],
         "dependencies": sorted(set(dependencies)),
         "checked_at": checked_at,
-        "valid_until": valid_until,
+        "valid_until": (
+            effective_valid_until.isoformat(timespec="seconds").replace("+00:00", "Z")
+            if effective_valid_until is not None
+            else None
+        ),
         "invalidation_reasons": invalidation_reasons,
     }
     artifact["id"] = _stable_id("as", artifact)
@@ -177,9 +222,26 @@ def validate_assumption_state(
     if artifact.get("status") != AssumptionStatus.VALID.value:
         raise ContractViolation(f"required assumption is {artifact.get('status')!r}")
 
-    current = _parse_time(now or _utc_now())
-    valid_until = _parse_time(artifact.get("valid_until"))
-    if valid_until is not None and current is not None and current > valid_until:
+    if artifact.get("temporal_profile") not in {None, TEMPORAL_PROFILE_VERSION}:
+        raise ContractViolation("ASSUMPTION_TEMPORAL_PROFILE_INVALID")
+
+    current = _parse_time(now or _utc_now(), field="evaluation_time", allow_none=False)
+    checked_at = _parse_time(
+        artifact.get("checked_at"),
+        field="assumption_checked_at",
+        allow_none=False,
+    )
+    assert current is not None and checked_at is not None
+    if checked_at > current:
+        raise ContractViolation("ASSUMPTION_CHECKED_AT_FUTURE")
+    if "valid_until" not in artifact:
+        raise ContractViolation("ASSUMPTION_VALID_UNTIL_MISSING")
+    valid_until = _parse_time(
+        artifact.get("valid_until"),
+        field="assumption_valid_until",
+        allow_none=True,
+    )
+    if valid_until is not None and current >= valid_until:
         raise ContractViolation("ASSUMPTION_STALE")
 
     integrity = artifact.get("integrity")
