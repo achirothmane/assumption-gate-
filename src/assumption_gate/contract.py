@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 CONTRACT_VERSION = "eba.integration/v0.1"
 TEMPORAL_PROFILE_VERSION = "eba.temporal/v1"
+CONTEXT_PROFILE_VERSION = "eba.context/v1"
 ASSUMPTION_KIND = "AssumptionState"
 
 
@@ -145,6 +146,9 @@ def build_assumption_state(
     evidence: Iterable[EvidenceRef],
     dependencies: Iterable[str] = (),
     trace_id: str,
+    subject_ref: str,
+    audience: str,
+    namespace: str,
     producer: str = "assumption-gate",
     checked_at: str | None = None,
     valid_until: str | None = None,
@@ -155,6 +159,12 @@ def build_assumption_state(
         raise ContractViolation("proposition is required")
     if not trace_id.strip():
         raise ContractViolation("trace_id is required")
+    if not subject_ref.strip():
+        raise ContractViolation("subject_ref is required")
+    if not audience.strip():
+        raise ContractViolation("audience is required")
+    if not namespace.strip():
+        raise ContractViolation("namespace is required")
 
     checked_at = checked_at or _utc_now()
     checked_instant = _parse_time(checked_at, field="checked_at", allow_none=False)
@@ -190,8 +200,16 @@ def build_assumption_state(
         "contract_version": CONTRACT_VERSION,
         "kind": ASSUMPTION_KIND,
         "temporal_profile": TEMPORAL_PROFILE_VERSION,
+        "context_profile": CONTEXT_PROFILE_VERSION,
         "trace_id": trace_id,
+        "subject_ref": subject_ref,
         "producer": producer,
+        "trust": {
+            "mode": "trusted_in_process",
+            "issuer": producer,
+            "audience": audience,
+            "namespace": namespace,
+        },
         "created_at": checked_at,
         "assumption_id": assumption_id,
         "proposition": proposition,
@@ -214,6 +232,11 @@ def validate_assumption_state(
     artifact: dict[str, Any],
     *,
     now: str | None = None,
+    trace_id: str,
+    subject_ref: str,
+    audience: str,
+    namespace: str,
+    evidence_refs: Iterable[str] | None = None,
 ) -> None:
     if artifact.get("contract_version") != CONTRACT_VERSION:
         raise ContractViolation("unsupported contract_version")
@@ -221,6 +244,23 @@ def validate_assumption_state(
         raise ContractViolation("expected AssumptionState")
     if artifact.get("status") != AssumptionStatus.VALID.value:
         raise ContractViolation(f"required assumption is {artifact.get('status')!r}")
+    if artifact.get("context_profile") != CONTEXT_PROFILE_VERSION:
+        raise ContractViolation("ASSUMPTION_CONTEXT_PROFILE_INVALID")
+    if artifact.get("trace_id") != trace_id:
+        raise ContractViolation("ASSUMPTION_TRACE_MISMATCH")
+    if artifact.get("subject_ref") != subject_ref:
+        raise ContractViolation("ASSUMPTION_SUBJECT_MISMATCH")
+    trust = artifact.get("trust")
+    if not isinstance(trust, dict) or trust.get("mode") != "trusted_in_process":
+        raise ContractViolation("ASSUMPTION_TRUST_ENVELOPE_INVALID")
+    if trust.get("audience") != audience:
+        raise ContractViolation("ASSUMPTION_AUDIENCE_MISMATCH")
+    if trust.get("namespace") != namespace:
+        raise ContractViolation("ASSUMPTION_NAMESPACE_MISMATCH")
+    if evidence_refs is not None:
+        expected_refs = list(evidence_refs)
+        if artifact.get("evidence_refs") != expected_refs:
+            raise ContractViolation("ASSUMPTION_EVIDENCE_BINDING_MISMATCH")
 
     if artifact.get("temporal_profile") not in {None, TEMPORAL_PROFILE_VERSION}:
         raise ContractViolation("ASSUMPTION_TEMPORAL_PROFILE_INVALID")
