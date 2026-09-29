@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable
 
+from .canonical import canonical_json_bytes as _canonical_json_bytes
+
 CONTRACT_VERSION = "eba.integration/v0.1"
 TEMPORAL_PROFILE_VERSION = "eba.temporal/v1"
 CONTEXT_PROFILE_VERSION = "eba.context/v1"
@@ -47,12 +49,7 @@ def _parse_time(value: Any, *, field: str, allow_none: bool = True) -> datetime 
 
 
 def canonical_json_bytes(value: dict[str, Any]) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+    return _canonical_json_bytes(value, error=ContractViolation)
 
 
 def _digest(value: dict[str, Any]) -> str:
