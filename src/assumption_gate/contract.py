@@ -10,6 +10,8 @@ from typing import Any, Iterable
 CONTRACT_VERSION = "eba.integration/v0.1"
 TEMPORAL_PROFILE_VERSION = "eba.temporal/v1"
 CONTEXT_PROFILE_VERSION = "eba.context/v1"
+CANONICAL_PROFILE_VERSION = "eba.canonical-json/v1"
+MAX_SAFE_INTEGER = 9007199254740991
 ASSUMPTION_KIND = "AssumptionState"
 
 
