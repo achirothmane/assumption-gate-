@@ -47,10 +47,28 @@ state = build_assumption_state(
         )
     ],
     trace_id="tr_123",
+    subject_ref="req_123",
+    audience="workflow-failure-lab/ci-retry-gate",
+    namespace="github-repository:owner/repo",
 )
 
 assert state["status"] == "VALID"
 ```
+
+## Context binding
+
+`AssumptionState` now carries `eba.context/v1` bindings for the trace,
+subject, audience and namespace that the consumer expects. The reference
+implementation marks these artifacts `trusted_in_process`: its self-hash is
+an integrity check, not proof that an external issuer is authentic.
+
+A caller that accepts serialized assumptions across a trust boundary must add
+an authenticated parent/signature binding of its own. Recomputing the
+artifact's SHA-256 is never sufficient external trust.
+
+This repository performs a narrow assumption projection. It does **not** claim
+that the projection is equivalent to evaluating the complete EASL dependency
+graph.
 
 ## Design boundary
 
