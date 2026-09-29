@@ -200,6 +200,7 @@ def build_assumption_state(
         "kind": ASSUMPTION_KIND,
         "temporal_profile": TEMPORAL_PROFILE_VERSION,
         "context_profile": CONTEXT_PROFILE_VERSION,
+        "canonical_profile": CANONICAL_PROFILE_VERSION,
         "trace_id": trace_id,
         "subject_ref": subject_ref,
         "producer": producer,
@@ -245,6 +246,8 @@ def validate_assumption_state(
         raise ContractViolation(f"required assumption is {artifact.get('status')!r}")
     if artifact.get("context_profile") != CONTEXT_PROFILE_VERSION:
         raise ContractViolation("ASSUMPTION_CONTEXT_PROFILE_INVALID")
+    if artifact.get("canonical_profile") != CANONICAL_PROFILE_VERSION:
+        raise ContractViolation("ASSUMPTION_CANONICAL_PROFILE_INVALID")
     if artifact.get("trace_id") != trace_id:
         raise ContractViolation("ASSUMPTION_TRACE_MISMATCH")
     if artifact.get("subject_ref") != subject_ref:
